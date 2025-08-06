@@ -1,42 +1,59 @@
-import * as React from 'react';
-import { StyleSheet, Text, View, Dimensions, Image, TouchableOpacity, FlatList, Animated, PanResponder } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+  StyleSheet, 
+  Text, 
+  View, 
+  Dimensions, 
+  Image, 
+  TouchableOpacity, 
+  FlatList, 
+  Animated, 
+  PanResponder,
+  Alert,
+  ActivityIndicator 
+} from 'react-native';
 import MapView, { Marker, Polyline, Circle } from 'react-native-maps';
 import { useNavigation } from '@react-navigation/native';
+import * as Location from 'expo-location';
+import ApiService from '../services/ApiService';
 
 const { width, height } = Dimensions.get('window');
-
-
 const BOTTOM_SHEET_HEIGHT = height * 0.4; 
 const MIN_BOTTOM_SHEET_HEIGHT = 0; 
 
 export default function ClientMap() { 
   const navigation = useNavigation();
-
-  const [origin, setOrigin] = React.useState({
+  
+  // Estados principales
+  const [origin, setOrigin] = useState({
     latitude: 32.46112324200113,
     longitude: -116.82542748158332,
   });
 
-  
-  const [trashLocations, setTrashLocations] = React.useState([
-    { id: 'CNT-001', latitude: 32.465000, longitude: -116.820000, percentage: 75, status: 'Active', type: 'biohazard' },
-    { id: 'CNT-002', latitude: 32.455000, longitude: -116.835000, percentage: 78, status: 'Active', type: 'normal' },
-    { id: 'CNT-003', latitude: 32.448000, longitude: -116.810000, percentage: 90, status: 'Active', type: 'normal' },
-    { id: 'CNT-004', latitude: 32.470000, longitude: -116.828000, percentage: 20, status: 'Active', type: 'normal' },
+  // Estados para datos del backend
+  const [companyContainers, setCompanyContainers] = useState([]);
+  const [userInfo, setUserInfo] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  // Estados de la UI
+  const [trashLocations, setTrashLocations] = useState([
+    { id: 'CTN-001', latitude: 32.465000, longitude: -116.820000, percentage: 75, status: 'Active', type: 'biohazard' },
+    { id: 'CTN-002', latitude: 32.455000, longitude: -116.835000, percentage: 78, status: 'Active', type: 'normal' },
+    { id: 'CTN-003', latitude: 32.448000, longitude: -116.810000, percentage: 90, status: 'Active', type: 'normal' },
+    { id: 'CTN-004', latitude: 32.470000, longitude: -116.828000, percentage: 20, status: 'Active', type: 'normal' },
   ]);
 
-  const [selectedContainerId, setSelectedContainerId] = React.useState(null);
-  const [showContainerList, setShowContainerList] = React.useState(false);
+  const [selectedContainerId, setSelectedContainerId] = useState(null);
+  const [showContainerList, setShowContainerList] = useState(false);
 
-  
-  const panY = React.useRef(new Animated.Value(MIN_BOTTOM_SHEET_HEIGHT)).current;
+  // Refs
+  const panY = useRef(new Animated.Value(MIN_BOTTOM_SHEET_HEIGHT)).current;
 
- 
-  const panResponder = React.useRef(
+  // PanResponder
+  const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onPanResponderMove: (event, gestureState) => {
-
         if (gestureState.dy > 0) { 
           panY.setValue(gestureState.dy);
         } else { 
@@ -59,9 +76,15 @@ export default function ClientMap() {
       },
     })
   ).current;
+  
+  // Cargar datos al iniciar el componente
+  useEffect(() => {
+    loadUserData();
+    loadCompanyContainers();
+  }, []);
 
-
-  React.useEffect(() => {
+  // Animación del bottom sheet
+  useEffect(() => {
     if (showContainerList) {
       Animated.spring(panY, {
         toValue: 0, 
@@ -76,12 +99,92 @@ export default function ClientMap() {
     }
   }, [showContainerList]);
 
+  const loadUserData = async () => {
+    try {
+      const user = await ApiService.getStoredUser();
+      setUserInfo(user);
+    } catch (error) {
+      console.error('Error al cargar datos del usuario:', error);
+    }
+  };
+
+  const loadCompanyContainers = async () => {
+    try {
+      setLoading(true);
+      const hasToken = await ApiService.loadStoredToken();
+
+      if (!hasToken) {
+        navigation.replace('Login');
+        return;
+      }
+
+      // Obtener contenedores de la empresa del employee
+      const result = await ApiService.getCompanyContainers();
+
+      if (result.success) {
+        setCompanyContainers(result.containers);
+        // Actualizar locations con datos reales
+        setTrashLocations(result.containers);
+      }
+    } catch (error) {
+      console.error('Error al cargar contenedores de la empresa:', error);
+      Alert.alert('Info', 'Usando datos de ejemplo. Endpoint no disponible aún.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const updateTrashLocations = (incidents) => {
+    const containers = incidents.map(incident => ({
+      id: incident.container_id,
+      latitude: incident.location?.coordinates[1] || 32.465000,
+      longitude: incident.location?.coordinates[0] || -116.820000,
+      percentage: Math.floor(Math.random() * 100),
+      status: incident.status === 'open' ? 'Active' : 'Inactive',
+      type: incident.type === 'toxic' ? 'biohazard' : 'normal'
+    }));
+    
+    setTrashLocations(containers);
+  };
+
+  const handleReportIncident = async (containerId, incidentData) => {
+    try {
+      const result = await ApiService.createIncident({
+        containerId,
+        title: incidentData.title,
+        description: incidentData.description,
+        type: incidentData.type || 'overflow',
+        priority: incidentData.priority || 'medium',
+        location: {
+          type: 'Point',
+          coordinates: [origin.longitude, origin.latitude]
+        }
+      });
+
+      if (result.success) {
+        Alert.alert('Éxito', 'Incidencia reportada correctamente');
+        loadCompanyContainers();
+      }
+    } catch (error) {
+      Alert.alert('Error', 'No se pudo reportar la incidencia');
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await ApiService.logout();
+      navigation.replace('Login');
+    } catch (error) {
+      console.error('Error al cerrar sesión:', error);
+    }
+  };
+
   const handleStartRoute = () => {
-    alert('Ruta iniciada. ¡A recolectar basura!');
+    Alert.alert('Ruta iniciada', '¡A recolectar basura!');
   };
 
   const handleRecenterMap = () => {
-    alert('Mapa centrado en tu ubicación.');
+    Alert.alert('Ubicación', 'Mapa centrado en tu ubicación.');
   };
 
   const handleOpenDrawer = () => {
@@ -98,7 +201,6 @@ export default function ClientMap() {
     setShowContainerList(false); 
   };
 
-
   const renderContainerItem = ({ item }) => (
     <TouchableOpacity
       style={[
@@ -109,14 +211,14 @@ export default function ClientMap() {
       onPress={() => handleContainerListItemPress(item.id)}
     >
       <Image
-        source={item.type === 'biohazard' ? require('../assets/toxictrash.png') : require('../assets/trash.png')}
+        source={item.type === 'biohazard' ? require('../assets/toxictrash.png') : require('../assets/trashempty.png')}
         style={styles.containerListItemIcon}
       />
       <View style={styles.containerListItemTextContent}>
         <Text style={styles.containerListItemId}>{item.id}</Text>
         <Text style={styles.containerListItemPercentage}>{item.percentage}%</Text>
       </View>
-      <TouchableOpacity onPress={() => alert(`Opciones para ${item.id}`)}>
+      <TouchableOpacity onPress={() => Alert.alert('Opciones', `Opciones para ${item.id}`)}>
         <Image
           source={require('../assets/threepoints.png')} 
           style={styles.containerListItemEllipsis}
@@ -125,6 +227,22 @@ export default function ClientMap() {
     </TouchableOpacity>
   );
 
+  
+  if (loading) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color="#158419" />
+        <Text style={{ marginTop: 10, color: '#666' }}>Cargando contenedores...</Text>
+        {userInfo && (
+          <Text style={{ marginTop: 5, color: '#999', fontSize: 12 }}>
+            Empresa: {userInfo.mongoCompanyId || 'COMP-001'}
+          </Text>
+        )}
+      </View>
+    );
+  }
+
+  
   return (
     <View style={styles.container}>
       <MapView
@@ -136,66 +254,70 @@ export default function ClientMap() {
           longitudeDelta: 0.0421,
         }}
       >
-        
+        {/* Marcador del usuario */}
         <Marker
           coordinate={origin}
           anchor={{ x: 0.5, y: 0.5 }}
+          zIndex={1000}
         >
           <View style={styles.userLocationMarker}>
             <Image
-              source={require('../assets/arrow.webp')}
+              source={require('../assets/icons8-navegación-48.png')}
               style={styles.userArrowIcon}
             />
           </View>
         </Marker>
 
-      
+        {/* Círculo de ubicación */}
         <Circle
           center={origin}
           radius={500}
-          strokeWidth={1}
-          strokeColor={'rgba(0, 122, 255, 0.5)'}
-          fillColor={'rgba(0, 122, 255, 0.1)'}
+          strokeWidth={2}
+          strokeColor={'rgba(21, 132, 25, 0.8)'}
+          fillColor={'rgba(21, 132, 25, 0.15)'}
+          zIndex={500}
         />
 
+        {/* Marcadores de contenedores */}
         {trashLocations.map(trash => (
           <Marker
             key={trash.id}
             coordinate={{ latitude: trash.latitude, longitude: trash.longitude }}
             anchor={{ x: 0.5, y: 0.5 }}
             onPress={() => handleTrashMarkerPress(trash.id)} 
+            zIndex={100}
           >
             <View style={styles.trashBinMarker}>
               <Image
-                source={trash.type === 'biohazard' ? require('../assets/city.png') : require('../assets/trash.png')}
+                source={trash.type === 'biohazard' ? require('../assets/toxictrash.png') : require('../assets/trashempty.png')}
                 style={styles.trashBinIcon}
               />
             </View>
           </Marker>
         ))}
 
-        
+        {/* Línea de ruta */}
         {trashLocations.length > 0 && (
           <Polyline
             coordinates={[origin, trashLocations[0]]}
-            strokeColor="#000"
-            strokeWidth={6}
+            strokeColor="#158419"
+            strokeWidth={3}
           />
         )}
       </MapView>
 
-     
+      {/* Foto de usuario */}
       <TouchableOpacity
         style={styles.userPhotoContainer}
         onPress={handleOpenDrawer}
       >
         <Image
-          source={require('../assets/user.jpg')}
+          source={require('../assets/icons8-profile-48.png')} 
           style={styles.userPhoto}
         />
       </TouchableOpacity>
 
-      
+      {/* Botón de iniciar ruta */}
       <TouchableOpacity
         style={styles.startButton}
         onPress={handleStartRoute}
@@ -203,18 +325,18 @@ export default function ClientMap() {
         <Text style={styles.startButtonText}>Start route</Text>
       </TouchableOpacity>
 
-      
+      {/* Botón de recentrar */}
       <TouchableOpacity
         style={styles.recenterButton}
         onPress={handleRecenterMap}
       >
         <Image
-          source={require('../assets/location.png')}
+          source={require('../assets/icons8-center-of-gravity-48.png')}
           style={styles.recenterIcon}
         />
       </TouchableOpacity>
 
-      
+      {/* Bottom sheet de contenedores */}
       {showContainerList && (
         <Animated.View
           style={[
@@ -224,6 +346,9 @@ export default function ClientMap() {
           {...panResponder.panHandlers}
         >
           <View style={styles.bottomSheetHandle} />
+          <Text style={styles.bottomSheetTitle}>
+            Contenedores de tu empresa {userInfo?.mongoCompanyId || 'COMP-001'}
+          </Text>
           <FlatList
             data={trashLocations}
             renderItem={renderContainerItem}
@@ -247,7 +372,6 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
   },
-  
   userLocationMarker: {
     width: 40,
     height: 40,
@@ -255,13 +379,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#158419',
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 2,
+    borderWidth: 3,
     borderColor: '#fff',
-    elevation: 3,
+    elevation: 8,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    zIndex: 1000,
   },
   userArrowIcon: {
     width: 20,
@@ -273,13 +398,13 @@ const styles = StyleSheet.create({
     height: 30,
     justifyContent: 'center',
     alignItems: 'center',
+    zIndex: 100,
   },
   trashBinIcon: {
     width: 25,
     height: 25,
     tintColor: '#333',
   },
-  
   userPhotoContainer: {
     position: 'absolute',
     top: 50,
@@ -341,7 +466,6 @@ const styles = StyleSheet.create({
     height: 25,
     tintColor: '#333',
   },
-  
   bottomSheet: {
     position: 'absolute',
     bottom: 0,
@@ -366,6 +490,13 @@ const styles = StyleSheet.create({
     borderRadius: 2.5,
     alignSelf: 'center',
     marginBottom: 10,
+  },
+  bottomSheetTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#333',
+    textAlign: 'center',
+    marginBottom: 15,
   },
   containerListContent: {
     paddingBottom: 20, 
@@ -410,5 +541,28 @@ const styles = StyleSheet.create({
     width: 20,
     height: 20,
     tintColor: '#999',
+  },
+  userPhotoContainer: {
+    position: 'absolute',
+    top: 50,
+    left: 20,
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: '#fff', 
+    borderWidth: 2,
+    borderColor: '#158419', 
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 5,
+    justifyContent: 'center', 
+    alignItems: 'center', 
+  },
+  userPhoto: {
+    width: 30, 
+    height: 30, 
+    tintColor: '#158419', 
   },
 });

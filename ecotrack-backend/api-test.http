@@ -1,0 +1,136 @@
+### ==========================================
+### ECOTRACK API TESTS
+### ==========================================
+
+# Variables globales
+@baseUrl = http://localhost:3000
+@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsImVtYWlsIjoiYWRtaW5AZWNvdHJhY2suY29tIiwicm9sZSI6ImFkbWluIiwiY29tcGFueUlkIjoxLCJpYXQiOjE3NTMzMTA4MDQsImV4cCI6MTc1MzkxNTYwNH0.EYSj84OXy-6l5sMAR_-KGxP4eg3h9zC1HcD6kyX6KoI
+
+### ==========================================
+### 1. TEST BÁSICO - Servidor funcionando
+### ==========================================
+GET {{baseUrl}}/
+Content-Type: application/json
+
+### ==========================================
+### 2. TEST CONEXIONES - PostgreSQL + MongoDB
+### ==========================================
+GET {{baseUrl}}/test-db
+Content-Type: application/json
+
+### ==========================================
+### 3. LOGIN ADMIN - Obtener token
+### ==========================================
+POST {{baseUrl}}/test-login
+Content-Type: application/json
+
+{
+  "username": "admin_ecotrack",
+  "password": "123456"
+}
+
+### ==========================================
+### 4. LOGIN COLLECTOR - Obtener token
+### ==========================================
+POST http://192.168.1.71:3000/login
+Content-Type: application/json
+
+{
+  "username": "larry_collector",
+  "password": "123456"
+}
+
+### ==========================================
+### 5. LOGIN EMPLOYEE - Obtener token
+### ==========================================
+POST {{baseUrl}}/test-login
+Content-Type: application/json
+
+{
+  "username": "juan_employee",
+  "password": "123456"
+}
+
+### ==========================================
+### 6. LOGIN INVÁLIDO - Username incorrecto
+### ==========================================
+POST {{baseUrl}}/test-login
+Content-Type: application/json
+
+{
+  "username": "usuario_inexistente",
+  "password": "123456"
+}
+
+
+### ==========================================
+### 7. LOGIN INVÁLIDO - Password incorrecta
+### ==========================================
+POST {{baseUrl}}/test-login
+Content-Type: application/json
+
+{
+  "username": "admin_ecotrack",
+  "password": "password_incorrecta"
+}
+
+### ==========================================
+### 8. TEST JWT - Verificar token (añadir token del login)
+### ==========================================
+# Primero copia el token del login exitoso arriba
+# Reemplaza "TU_TOKEN_AQUI" con el token obtenido
+
+POST {{baseUrl}}/verify-token
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsImVtYWlsIjoiYWRtaW5AZWNvdHJhY2suY29tIiwicm9sZSI6ImFkbWluIiwiY29tcGFueUlkIjoxLCJpYXQiOjE3NTMzMTA4MDQsImV4cCI6MTc1MzkxNTYwNH0.EYSj84OXy-6l5sMAR_-KGxP4eg3h9zC1HcD6kyX6KoI
+
+### ==========================================
+### 9. TEST MONGODB - Assignments (requiere token de collector)
+### ==========================================
+GET {{baseUrl}}/assignments
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjIsImVtYWlsIjoibGFycnlAY29sbGVjdG9yLmNvbSIsInJvbGUiOiJjb2xsZWN0b3IiLCJjb21wYW55SWQiOjEsImlhdCI6MTc1MzMxMTQzMCwiZXhwIjoxNzUzOTE2MjMwfQ.8adrMkWft-C0gQ5sRZcgZvFn_NQdqpeZ732Qn82ZwkE
+
+### ==========================================
+### 10. TEST MONGODB - Incidents (requiere token de employee)
+### ==========================================
+GET {{baseUrl}}/incidents
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjMsImVtYWlsIjoianVhbkBlbXByZXNhLmNvbSIsInJvbGUiOiJlbXBsb3llZSIsImNvbXBhbnlJZCI6MSwiaWF0IjoxNzUzMzExNDY2LCJleHAiOjE3NTM5MTYyNjZ9.59qNCCzICuZstHPZZ-lPkYbuSq_m8ebLvH3ffW7W3vQ
+
+### ==========================================
+### 11. CREATE INCIDENT - Crear incidencia
+### ==========================================
+POST {{baseUrl}}/incidents
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjMsImVtYWlsIjoianVhbkBlbXByZXNhLmNvbSIsInJvbGUiOiJlbXBsb3llZSIsImNvbXBhbnlJZCI6MSwiaWF0IjoxNzUzMzExNDY2LCJleHAiOjE3NTM5MTYyNjZ9.59qNCCzICuZstHPZZ-lPkYbuSq_m8ebLvH3ffW7W3vQ
+
+{
+  "containerId": "CTN-002",
+  "title": "Un animal accedió al contenedor",
+  "description": "Parece que un mapache entro a comerse los residuos",
+  "type": "animals",
+  "priority": "low",
+  "location": {
+    "type": "Point",
+    "coordinates": [-99.123, 19.456]
+  },
+  "images": []
+}
+
+### ==========================================
+### 12. TEST REGISTRO NUEVO USUARIO (BONUS)
+### ==========================================
+POST {{baseUrl}}/register
+Content-Type: application/json
+
+{
+  "username": "carlos_empleado",
+  "nombre": "Carlos",
+  "apellido": "González",
+  "email": "carlos@empresa.com",
+  "password": "123456",
+  "role": "employee",
+  "telefono": "+52-555-4444444",
+  "companyId": 1
+}

@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
+import ApiService from '../services/ApiService';
+import RouteService from '../services/RouteService';
 import { 
   StyleSheet, 
   Text, 
@@ -10,9 +12,10 @@ import {
   Animated, 
   PanResponder,
   Modal,
-  Alert 
+  Alert,
+  ActivityIndicator 
 } from 'react-native';
-import MapView, { Marker, Polyline, Circle } from 'react-native-maps';
+import OSMMapView from 'react-native-osm';
 import { useNavigation } from '@react-navigation/native';
 import * as Location from 'expo-location';
 
@@ -22,8 +25,11 @@ const BOTTOM_SHEET_HEIGHT = height * 0.33;
 const STATUS_SHEET_HEIGHT = height * 0.6;
 const MIN_BOTTOM_SHEET_HEIGHT = 0; 
 
-export default function Map() { 
-  const navigation = useNavigation();
+export default function Map({ navigation, route }) { 
+  // Manejar route de forma segura
+  const routeParams = route?.params || {};
+  const routeData = routeParams.routeData || null;
+  
   const mapRef = useRef(null);
 
   const [origin, setOrigin] = useState({
@@ -31,7 +37,147 @@ export default function Map() {
     longitude: -116.82542748158332,
   });
 
-  // Ubicaciones de empresas/zonas de recolección
+  // Estados para datos del backend
+  const [assignments, setAssignments] = useState([]);
+  const [userInfo, setUserInfo] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [currentRoute, setCurrentRoute] = useState(routeData);
+  const [routeContainers, setRouteContainers] = useState(routeData?.containers || []);
+  const [completedContainers, setCompletedContainers] = useState([]);
+  const [routePaused, setRoutePaused] = useState(false);
+
+  // Estados para UI
+  const [selectedCompany, setSelectedCompany] = useState(null);
+  const [showCompanyMenu, setShowCompanyMenu] = useState(false);
+  const [showStatusMenu, setShowStatusMenu] = useState(false);
+  const [showRoute, setShowRoute] = useState(false);
+  const [isRouteStarted, setIsRouteStarted] = useState(false);
+  const [showFinishConfirmation, setShowFinishConfirmation] = useState(false);
+  const [showFinishSuccess, setShowFinishSuccess] = useState(false);
+
+  //  NUEVOS ESTADOS PARA CONTENEDORES REALES
+  const [containersByCompany, setContainersByCompany] = useState({});
+  const [loadingContainers, setLoadingContainers] = useState(false);
+
+  //  NUEVOS ESTADOS PARA OPENROUTESERVICE
+  const [isNavigating, setIsNavigating] = useState(false);
+  const [routePolyline, setRoutePolyline] = useState([]);
+  const [locationTracking, setLocationTracking] = useState(false);
+  const [nextWaypoint, setNextWaypoint] = useState(null);
+  const [routeInstructions, setRouteInstructions] = useState([]);
+  const [recalculating, setRecalculating] = useState(false);
+
+  const panY = React.useRef(new Animated.Value(BOTTOM_SHEET_HEIGHT)).current;
+
+  // Cargar datos de ruta si vienen en los parámetros
+  useEffect(() => {
+    if (routeData && routeData.started) {
+      console.log('✅ Route data received in Map:', routeData);
+      setCurrentRoute(routeData);
+      setRouteContainers(routeData.containers || []);
+      setIsRouteStarted(true);
+      
+      // Mostrar información de la ruta
+      Alert.alert(
+        'Ruta Iniciada 🚛',
+        `Ruta ${routeData.route_id} con ${routeData.containers?.length || 0} contenedores`,
+        [{ text: 'OK' }]
+      );
+    }
+  }, [routeData]);
+
+  const loadUserData = async () => {
+    try {
+      const user = await ApiService.getStoredUser();
+      if (user) {
+        setUserInfo(user);
+        console.log('✅ User loaded in Map:', user.username);
+      } else {
+        console.log('❌ No user data found, redirecting to login');
+        navigation.replace('Login');
+      }
+    } catch (error) {
+      console.error('Error loading user data:', error);
+      navigation.replace('Login');
+    }
+  };
+
+  const loadAssignments = async () => {
+    try {
+      setLoading(true);
+      const hasToken = await ApiService.loadStoredToken();
+      
+      if (!hasToken) {
+        navigation.replace('Login');
+        return;
+      }
+
+      const result = await ApiService.getAssignments();
+      
+      if (result.success) {
+        setAssignments(result.assignments);
+        updateCompanyLocations(result.assignments);
+        console.log('✅ Assignments loaded:', result.assignments.length);
+      }
+    } catch (error) {
+      console.error('Error loading assignments:', error);
+      Alert.alert('Error', 'No se pudieron cargar las asignaciones');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Cargar ruta actual si existe
+  const loadCurrentRoute = async () => {
+    if (routeData) return; // No cargar si ya viene una ruta de RoutePreparation
+    
+    try {
+      const result = await ApiService.getCurrentRoute();
+      if (result.success && result.route) {
+        setCurrentRoute(result.route);
+        setRouteContainers(result.route.containers || []);
+        setIsRouteStarted(result.route.status === 'in_progress');
+        setRoutePaused(result.route.status === 'paused');
+      }
+    } catch (error) {
+      console.log('No current route found or error loading:', error.message);
+    }
+  };
+
+  useEffect(() => {
+    loadUserData();
+    loadAssignments();
+    loadCurrentRoute();
+    requestLocationPermission();
+  }, []);
+
+  const updateCompanyLocations = (assignments) => {
+    // Convertir asignaciones a formato de ubicaciones para el mapa
+    const locations = assignments.flatMap(assignment => 
+      assignment.companies?.map(companyId => ({
+        id: companyId,
+        name: `Company ${companyId}`,
+        latitude: 32.465000 + Math.random() * 0.01, // Coordenadas de ejemplo
+        longitude: -116.820000 + Math.random() * 0.01,
+        distance: '2-5 min',
+        containerCount: assignment.containers?.length || 0
+      })) || []
+    );
+    
+    setCompanyLocations(locations);
+  };
+
+  // Función de logout
+  const handleLogout = async () => {
+    try {
+      await ApiService.logout();
+      navigation.replace('Login');
+    } catch (error) {
+      console.error('Error al cerrar sesión:', error);
+    }
+  };
+
+  // Ubicaciones de empresas/zonas de recolección (datos mock como fallback)
   const [companyLocations, setCompanyLocations] = useState([
     { 
       id: 'COMP-001', 
@@ -59,43 +205,114 @@ export default function Map() {
     },
   ]);
 
-  // Contenedores específicos por empresa
-  const [containersByCompany, setContainersByCompany] = useState({
-    'COMP-001': [
-      { id: 'CNT-001', latitude: 32.465100, longitude: -116.820100, percentage: 75, type: 'biohazard' },
-      { id: 'CNT-002', latitude: 32.465200, longitude: -116.820200, percentage: 90, type: 'normal' },
-      { id: 'CNT-003', latitude: 32.465300, longitude: -116.820300, percentage: 20, type: 'normal' },
-      { id: 'CNT-004', latitude: 32.465400, longitude: -116.820400, percentage: 85, type: 'biohazard' },
-    ],
-    'COMP-002': [
-      { id: 'CNT-005', latitude: 32.455100, longitude: -116.835100, percentage: 60, type: 'normal' },
-      { id: 'CNT-006', latitude: 32.455200, longitude: -116.835200, percentage: 95, type: 'biohazard' },
-      { id: 'CNT-007', latitude: 32.455300, longitude: -116.835300, percentage: 15, type: 'normal' },
-    ],
-    'COMP-003': [
-      { id: 'CNT-008', latitude: 32.448100, longitude: -116.810100, percentage: 80, type: 'normal' },
-      { id: 'CNT-009', latitude: 32.448200, longitude: -116.810200, percentage: 70, type: 'biohazard' },
-      { id: 'CNT-010', latitude: 32.448300, longitude: -116.810300, percentage: 25, type: 'normal' },
-      { id: 'CNT-011', latitude: 32.448400, longitude: -116.810400, percentage: 90, type: 'normal' },
-      { id: 'CNT-012', latitude: 32.448500, longitude: -116.810500, percentage: 35, type: 'biohazard' },
-      { id: 'CNT-013', latitude: 32.448600, longitude: -116.810600, percentage: 88, type: 'biohazard' },
-    ],
-  });
+  // ✅ MEJORAR loadCompanyContainers CON MEJOR ERROR HANDLING
+const loadCompanyContainers = async (companyId) => {
+  try {
+    setLoadingContainers(true);
+    console.log(`📦 Loading containers for company: ${companyId}`);
+    
+    const result = await ApiService.getCompanyContainers(companyId);
+    console.log(`🔍 Raw API response for ${companyId}:`, JSON.stringify(result, null, 2));
+    
+    if (result.success) {
+      const containers = result.containers || [];
+      
+      if (containers.length === 0) {
+        console.warn(`⚠️ No containers found for company ${companyId}`);
+        Alert.alert(
+          'No Containers',
+          `No containers found for company ${companyId}`,
+          [{ text: 'OK' }]
+        );
+        return [];
+      }
+      
+      // ✅ PROCESAR Y VALIDAR DATOS CORRECTAMENTE
+      const processedContainers = containers.map(container => {
+        const processedContainer = {
+          id: container.container_id || container.id,
+          container_id: container.container_id || container.id,
+          type: container.type || 'normal',
+          capacity: container.capacity || 240,
+          status: container.status || 'active',
+          device_id: container.device_id,
+          percentage: Math.round(Number(container.percentage) || 0), // ✅ ASEGURAR NÚMERO
+          location: {
+            latitude: Number(container.location?.latitude) || 32.465000,
+            longitude: Number(container.location?.longitude) || -116.820000,
+            address: container.location?.address || 'Address not available'
+          },
+          last_collection: container.last_collection,
+          created_at: container.created_at
+        };
+        
+        console.log(`✅ Processed container:`, {
+          id: processedContainer.container_id,
+          percentage: processedContainer.percentage,
+          type: processedContainer.type
+        });
+        
+        return processedContainer;
+      });
+      
+      // Actualizar estado
+      setContainersByCompany(prevState => ({
+        ...prevState,
+        [companyId]: processedContainers
+      }));
+      
+      console.log(`✅ Successfully loaded ${processedContainers.length} containers for ${companyId}`);
+      return processedContainers;
+      
+    } else {
+      throw new Error(result.message || 'Failed to load containers');
+    }
+  } catch (error) {
+    console.error(`❌ Error loading containers for company ${companyId}:`, error);
+    
+    Alert.alert(
+      'Connection Error',
+      `Could not load containers for ${companyId}: ${error.message}`,
+      [
+        { 
+          text: 'Use Sample Data', 
+          onPress: () => {
+            const mockContainers = generateMockContainersForCompany(companyId);
+            setContainersByCompany(prevState => ({
+              ...prevState,
+              [companyId]: mockContainers
+            }));
+          }
+        },
+        { text: 'Cancel', style: 'cancel' }
+      ]
+    );
+    
+    return [];
+  } finally {
+    setLoadingContainers(false);
+  }
+};
 
-  const [selectedCompany, setSelectedCompany] = useState(null);
-  const [showCompanyMenu, setShowCompanyMenu] = useState(false);
-  const [showStatusMenu, setShowStatusMenu] = useState(false);
-  const [showRoute, setShowRoute] = useState(false);
-  const [isRouteStarted, setIsRouteStarted] = useState(false);
-  const [showFinishConfirmation, setShowFinishConfirmation] = useState(false);
-  const [showFinishSuccess, setShowFinishSuccess] = useState(false);
-
-  const panY = React.useRef(new Animated.Value(BOTTOM_SHEET_HEIGHT)).current;
-
-  // Solicitar permisos de ubicación al cargar el componente
-  useEffect(() => {
-    requestLocationPermission();
-  }, []);
+  // ✅ FUNCIÓN DE FALLBACK PARA GENERAR MOCK DATA
+  const generateMockContainersForCompany = (companyId) => {
+    const mockContainers = {
+      'COMP-001': [
+        { id: 'CTN-001', container_id: 'CTN-001', latitude: 32.465100, longitude: -116.820100, percentage: 75, type: 'biohazard' },
+        { id: 'CTN-002', container_id: 'CTN-002', latitude: 32.465200, longitude: -116.820200, percentage: 90, type: 'normal' },
+        { id: 'CTN-003', container_id: 'CTN-003', latitude: 32.465300, longitude: -116.820300, percentage: 60, type: 'normal' },
+      ],
+      'COMP-002': [
+        { id: 'CTN-005', container_id: 'CTN-005', latitude: 32.455100, longitude: -116.835100, percentage: 85, type: 'biohazard' },
+      ],
+      'COMP-003': [
+        { id: 'CTN-008', container_id: 'CTN-008', latitude: 32.448100, longitude: -116.810100, percentage: 80, type: 'normal' },
+        { id: 'CTN-009', container_id: 'CTN-009', latitude: 32.448200, longitude: -116.810200, percentage: 70, type: 'normal' },
+      ],
+    };
+    
+    return mockContainers[companyId] || [];
+  };
 
   const requestLocationPermission = async () => {
     try {
@@ -181,29 +398,148 @@ export default function Map() {
     }
   }, [showCompanyMenu, showStatusMenu]);
 
-  const handleStartRoute = () => {
-    if (isRouteStarted) {
-      setShowFinishConfirmation(true);
-    } else {
-      setIsRouteStarted(true);
-      alert('Ruta iniciada. ¡A recolectar basura!');
+  const handleStartNavigation = async () => {
+    if (!selectedCompany || !containersByCompany[selectedCompany.id]) {
+      Alert.alert('Error', 'Please select a company and containers first');
+      return;
+    }
+
+    try {
+      setRecalculating(true);
+      
+      // Obtener contenedores como waypoints
+      const containers = containersByCompany[selectedCompany.id];
+      const waypoints = containers.map(container => ({
+        id: container.container_id,
+        latitude: container.location.latitude,
+        longitude: container.location.longitude,
+        type: container.type,
+        percentage: container.percentage
+      }));
+
+      console.log(`🚗 Starting navigation to ${waypoints.length} containers...`);
+
+      // Calcular ruta optimizada
+      const route = await RouteService.getOptimizedRoute(origin, waypoints);
+      
+      if (route) {
+        setCurrentRoute(route);
+        setRoutePolyline(route.polylineCoordinates);
+        setRouteInstructions(route.instructions);
+        setIsNavigating(true);
+        
+        // Guardar ruta
+        await RouteService.saveRoute(route);
+        
+        // Iniciar tracking de ubicación
+        startLocationTracking();
+        
+        Alert.alert(
+          '🗺️ Navigation Started',
+          `Route calculated: ${route.summary.totalDistance} - ${route.summary.estimatedTime}`,
+          [{ text: 'Start Driving', onPress: () => setShowRoute(true) }]
+        );
+        
+      } else {
+        throw new Error('Could not calculate route');
+      }
+      
+    } catch (error) {
+      console.error('❌ Error starting navigation:', error);
+      Alert.alert(
+        'Navigation Error', 
+        `Could not start navigation: ${error.message}`,
+        [
+          { 
+            text: 'Use Basic Route', 
+            onPress: () => handleSelectCompany() // Fallback al método anterior
+          },
+          { text: 'Cancel', style: 'cancel' }
+        ]
+      );
+    } finally {
+      setRecalculating(false);
     }
   };
 
-  const handleConfirmFinishRoute = () => {
-    setShowFinishConfirmation(false);
-    setShowFinishSuccess(true);
+  // NUEVA FUNCIÓN: TRACKING DE UBICACIÓN EN TIEMPO REAL
+  const startLocationTracking = () => {
+    setLocationTracking(true);
+    
+    RouteService.startLocationTracking(
+      // Callback para actualización de posición
+      (newPosition) => {
+        setOrigin(newPosition);
+        
+        // Actualizar siguiente waypoint
+        if (currentRoute) {
+          const next = RouteService.getNextWaypoint(newPosition, currentRoute);
+          setNextWaypoint(next);
+        }
+      },
+      // Callback para recalculación de ruta
+      (recalculation) => {
+        if (recalculation.recalculated) {
+          console.log('🔄 Route recalculated due to:', recalculation.reason);
+          setCurrentRoute(recalculation);
+          setRoutePolyline(recalculation.polylineCoordinates);
+          setRouteInstructions(recalculation.instructions);
+          
+          Alert.alert(
+            '🔄 Route Updated',
+            'Your route has been recalculated due to deviation',
+            [{ text: 'Continue' }]
+          );
+        }
+      }
+    );
   };
 
-  const handleCancelFinishRoute = () => {
-    setShowFinishConfirmation(false);
+  // NUEVA FUNCIÓN: DETENER NAVEGACIÓN
+  const stopNavigation = () => {
+    setIsNavigating(false);
+    setLocationTracking(false);
+    setCurrentRoute(null);
+    setRoutePolyline([]);
+    setRouteInstructions([]);
+    setNextWaypoint(null);
+    
+    RouteService.stopLocationTracking();
+    
+    Alert.alert('Navigation Stopped', 'You can start a new route anytime');
   };
 
-  const handleFinishRouteSuccess = () => {
-    setShowFinishSuccess(false);
-    setIsRouteStarted(false);
-    setShowRoute(false);
-    setSelectedCompany(null);
+  const handleStartRoute = () => {
+    if (isNavigating) {
+      Alert.alert(
+        'Navigation Active',
+        'You are currently navigating. What would you like to do?',
+        [
+          { text: 'Continue', style: 'cancel' },
+          { text: 'Stop Navigation', onPress: stopNavigation, style: 'destructive' }
+        ]
+      );
+    } else if (isRouteStarted) {
+      // Lógica existente para rutas activas
+      handleFinishRoute();
+    } else {
+      // Navegar a RoutePreparation
+      navigation.navigate('RoutePreparation', {
+        assignmentData: assignments
+      });
+    }
+  };
+
+  // Nueva función para pausar ruta
+  const handlePauseRoute = () => {
+    setRoutePaused(true);
+    Alert.alert('Route Paused', 'You can resume the route anytime');
+  };
+
+  // Nueva función para reanudar ruta
+  const handleResumeRoute = () => {
+    setRoutePaused(false);
+    Alert.alert('Route Resumed', 'Continue collecting containers');
   };
 
   // Función mejorada para centrar el mapa
@@ -257,17 +593,38 @@ export default function Map() {
     navigation.openDrawer();
   };
 
-  const handleCompanyMarkerPress = (company) => {
+  // ✅ ACTUALIZAR handleCompanyMarkerPress PARA CARGAR CONTENEDORES REALES
+  const handleCompanyMarkerPress = async (company) => {
     setSelectedCompany(company);
     setShowCompanyMenu(true);
     setShowStatusMenu(false);
     setShowRoute(false);
+    
+    // ✅ CARGAR CONTENEDORES REALES CUANDO SE SELECCIONA LA EMPRESA
+    await loadCompanyContainers(company.id);
   };
 
+  // handleSelectCompany PARA MOSTRAR LOS CONTENEDORES CARGADOS
   const handleSelectCompany = () => {
-    setShowRoute(true);
-    setShowCompanyMenu(false);
-    setShowStatusMenu(false);
+    Alert.alert(
+      'Route Options',
+      'How would you like to plan your route?',
+      [
+        { 
+          text: 'Smart Navigation', 
+          onPress: handleStartNavigation // NUEVA OPCIÓN
+        },
+        { 
+          text: 'Basic Route', 
+          onPress: () => {
+            setShowRoute(true);
+            setShowCompanyMenu(false);
+            setShowStatusMenu(false);
+          }
+        },
+        { text: 'Cancel', style: 'cancel' }
+      ]
+    );
   };
 
   const handleSelectAnother = () => {
@@ -278,30 +635,215 @@ export default function Map() {
     alert('Puedes seleccionar otra empresa en el mapa');
   };
 
-  const handleContainerPress = (containerId) => {
-    navigation.navigate('ContainersDataScreen', { containerId: containerId });
+  const handleContainerPress = async (container) => {
+    try {
+      // Verificar si es parte de la ruta actual
+      if (currentRoute && routeContainers.find(c => c.id === container.id)) {
+        const isCompleted = completedContainers.includes(container.id);
+        
+        if (isCompleted) {
+          Alert.alert('Container Status', 'This container has already been collected');
+          return;
+        }
+
+        // 🎯 Obtener datos reales del contenedor desde MongoDB
+        const containerData = await getContainerRealTimeData(container.id);
+        
+        // Navegar a ContainersDataScreen con datos completos y en modo ruta
+        navigation.navigate('ContainersDataScreen', { 
+          containerId: container.id,
+          containerData: containerData,
+          isInRoute: true, // ✅ Indica que está en una ruta activa
+          routeId: currentRoute.route_id,
+          onContainerCompleted: handleMarkAsCollected // Callback para marcar como completado
+        });
+      } else {
+        // 🎯 Comportamiento normal - solo ver datos, sin botón Complete
+        const containerData = await getContainerRealTimeData(container.id);
+        
+        navigation.navigate('ContainersDataScreen', { 
+          containerId: container.id,
+          containerData: containerData,
+          isInRoute: false, // ✅ No está en ruta, solo vista
+          routeId: null
+        });
+      }
+    } catch (error) {
+      console.error('Error getting container data:', error);
+      Alert.alert('Error', 'Could not load container data');
+    }
+  };
+
+  // 🔧 Nueva función para obtener datos en tiempo real del contenedor
+  const getContainerRealTimeData = async (containerId) => {
+    try {
+      // Llamar al nuevo endpoint para obtener datos del contenedor
+      const result = await ApiService.getContainerDetails(containerId);
+      
+      if (result.success) {
+        return result.container;
+      } else {
+        throw new Error('Container not found');
+      }
+    } catch (error) {
+      console.error('Error fetching container data:', error);
+      // Retornar datos por defecto si hay error
+      return {
+        container_id: containerId,
+        location: { latitude: 0, longitude: 0 },
+        latest_sensor_data: {
+          temperature: 25.0,
+          humidity: 50,
+          co2: 400,
+          fill_level: 0
+        },
+        company_name: 'Unknown Company',
+        type: 'normal',
+        status: 'active'
+      };
+    }
+  };
+
+  const handleMarkAsCollected = async (containerId) => {
+    try {
+      if (!currentRoute || !currentRoute.route_id) {
+        Alert.alert('Error', 'No active route found');
+        return;
+      }
+
+      // Llamar al endpoint para marcar como recolectado
+      const result = await ApiService.markContainerCollected(
+        containerId, 
+        currentRoute.route_id,
+        'Collected by collector',
+        Math.floor(Math.random() * 100) // Fill level antes de recolectar
+      );
+      
+      if (result.success) {
+        setCompletedContainers(prev => [...prev, containerId]);
+        
+        Alert.alert(
+          '✅ Container Collected', 
+          'Container marked as collected successfully',
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                // Regresar al mapa
+                navigation.goBack();
+                
+                // Verificar si se completó la ruta
+                if (completedContainers.length + 1 === routeContainers.length) {
+                  setTimeout(() => {
+                    Alert.alert(
+                      'Route Completed! 🎉',
+                      'All containers have been collected. Ready to finish route?',
+                      [
+                        { text: 'Continue', style: 'cancel' },
+                        { 
+                          text: 'Finish Route', 
+                          onPress: () => setShowFinishConfirmation(true)
+                        }
+                      ]
+                    );
+                  }, 500);
+                }
+              }
+            }
+          ]
+        );
+      } else {
+        Alert.alert('Error', 'Could not mark container as collected');
+      }
+    } catch (error) {
+      console.error('Error marking container as collected:', error);
+      Alert.alert('Error', 'Could not mark container as collected');
+    }
+  };
+
+  // Función para confirmar finalización de ruta
+  const handleConfirmFinishRoute = async () => {
+    try {
+      if (!currentRoute || !currentRoute.route_id) {
+        Alert.alert('Error', 'No active route to finish');
+        setShowFinishConfirmation(false);
+        return;
+      }
+
+      console.log('🏁 Finishing route:', currentRoute.route_id);
+      
+      const result = await ApiService.finishRoute(currentRoute.route_id);
+      
+      if (result.success) {
+        setShowFinishConfirmation(false);
+        setShowFinishSuccess(true);
+        console.log('✅ Route finished successfully');
+      } else {
+        Alert.alert('Error', 'Could not finish route');
+        setShowFinishConfirmation(false);
+      }
+    } catch (error) {
+      console.error('Error finishing route:', error);
+      Alert.alert('Error', 'Could not finish route');
+      setShowFinishConfirmation(false);
+    }
+  };
+
+  const handleFinishRoute = () => {
+    if (currentRoute && completedContainers.length < routeContainers.length) {
+      const remaining = routeContainers.length - completedContainers.length;
+      Alert.alert(
+        'Incomplete Route',
+        `${remaining} containers are still pending. Are you sure you want to finish?`,
+        [
+          { text: 'Continue Route', style: 'cancel' },
+          { text: 'Force Finish', onPress: () => setShowFinishConfirmation(true) }
+        ]
+      );
+    } else {
+      setShowFinishConfirmation(true);
+    }
+  };
+
+  const handleCancelFinishRoute = () => {
+    setShowFinishConfirmation(false);
+  };
+
+  const handleFinishRouteSuccess = () => {
+    setShowFinishSuccess(false);
+    setIsRouteStarted(false);
+    setShowRoute(false);
+    setSelectedCompany(null);
+    setCurrentRoute(null);
+    setRouteContainers([]);
+    setCompletedContainers([]);
+    setRoutePaused(false);
   };
 
   const handleIncidences = () => {
     if (selectedCompany) {
       navigation.navigate('IncidencesScreen', {
         companyId: selectedCompany.id,
-        companyName: selectedCompany.name
+        companyName: selectedCompany.name,
+        userRole: userInfo?.role || 'collector'
       });
     }
   };
   
-  const handleStatus = () => {
+  // ✅ ACTUALIZAR handleStatus PARA MOSTRAR CONTENEDORES REALES
+  const handleStatus = async () => {
     setShowCompanyMenu(false);
     setShowStatusMenu(true);
+    
+    // Asegurar que los contenedores estén cargados
+    if (!containersByCompany[selectedCompany.id] || containersByCompany[selectedCompany.id].length === 0) {
+      await loadCompanyContainers(selectedCompany.id);
+    }
   };
 
   const handleOptions = () => {
     alert('Mostrar opciones');
   };
-
-
-
 
   const getContainerIcon = (type) => {
     switch(type) {
@@ -314,31 +856,105 @@ export default function Map() {
     }
   };
 
-  const renderContainerItem = ({ item }) => (
-    <TouchableOpacity
-      style={styles.containerListItem}
-      onPress={() => handleContainerPress(item.id)}
-    >
-      <Image
-        source={getContainerIcon(item.type)}
-        style={styles.containerListIcon}
-      />
-      <View style={styles.containerListInfo}>
-        <Text style={styles.containerListId}>{item.id}</Text>
-        <Text style={styles.containerListPercentage}>{item.percentage}%</Text>
-      </View>
-      <TouchableOpacity style={styles.containerOptionsButton}>
+  // ✅ ACTUALIZAR renderContainerItem PARA MOSTRAR DATOS REALES
+  const renderContainerItem = ({ item }) => {
+    // Determinar el color basado en el tipo y porcentaje
+    const getContainerColor = (type, percentage) => {
+      if (type === 'biohazard') {
+        if (percentage >= 90) return '#FF0000'; // Crítico
+        if (percentage >= 75) return '#FF6600'; // Alto
+        if (percentage >= 50) return '#FFA500'; // Medio
+        return '#4CAF50'; // Bajo
+      } else {
+        if (percentage >= 90) return '#FF0000'; // Crítico
+        if (percentage >= 80) return '#FF6600'; // Alto
+        if (percentage >= 70) return '#FFA500'; // Medio
+        return '#4CAF50'; // Bajo
+      }
+    };
+
+    return (
+      <TouchableOpacity
+        style={styles.containerListItem}
+        onPress={() => handleContainerPress(item)}
+      >
         <Image
-          source={require('../assets/other-2.png')}
-          style={styles.containerOptionsIcon}
+          source={getContainerIcon(item.type)}
+          style={[
+            styles.containerListIcon,
+            { tintColor: getContainerColor(item.type, item.percentage) }
+          ]}
         />
+        <View style={styles.containerListInfo}>
+          <Text style={styles.containerListId}>{item.container_id}</Text>
+          <Text style={[
+            styles.containerListPercentage,
+            { color: getContainerColor(item.type, item.percentage) }
+          ]}>
+            {Math.round(item.percentage || 0)}% • {item.type?.toUpperCase()}
+          </Text>
+          {item.device_id && (
+            <Text style={styles.containerDeviceId}>
+              Device: {item.device_id}
+            </Text>
+          )}
+        </View>
+        <TouchableOpacity style={styles.containerOptionsButton}>
+          <Image
+            source={require('../assets/other-2.png')}
+            style={styles.containerOptionsIcon}
+          />
+        </TouchableOpacity>
       </TouchableOpacity>
-    </TouchableOpacity>
-  );
+    );
+  };
+
+  if (loading) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color="#158419" />
+        <Text style={{ marginTop: 10, color: '#666' }}>Cargando asignaciones...</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
-      <MapView
+      {/* Mostrar información de ruta activa en la parte superior */}
+      {isNavigating && nextWaypoint && (
+        <View style={styles.navigationHeader}>
+          <View style={styles.navigationInfo}>
+            <Text style={styles.navigationDistance}>
+              {nextWaypoint.distanceToWaypoint}m to next container
+            </Text>
+            <Text style={styles.navigationInstruction}>
+              {routeInstructions[0]?.instruction || 'Continue straight'}
+            </Text>
+          </View>
+          {recalculating && (
+            <ActivityIndicator size="small" color="#fff" />
+          )}
+        </View>
+      )}
+
+      {/* Header de ruta activa existente */}
+      {currentRoute && isRouteStarted && !isNavigating && (
+        <View style={styles.activeRouteHeader}>
+          <View style={styles.routeInfoContainer}>
+            <Text style={styles.routeTitle}>{currentRoute.route_id}</Text>
+            <Text style={styles.routeProgress}>
+              {completedContainers.length}/{routeContainers.length} completed
+            </Text>
+          </View>
+          {routePaused && (
+            <View style={styles.pausedBadge}>
+              <Text style={styles.pausedText}>PAUSED</Text>
+            </View>
+          )}
+        </View>
+      )}
+
+      <OSMMapView
         ref={mapRef}
         style={styles.map}
         initialRegion={{
@@ -347,57 +963,103 @@ export default function Map() {
           latitudeDelta: 0.0922,
           longitudeDelta: 0.0421,
         }}
-        showsUserLocation={true}
-        showsMyLocationButton={false}
-        followsUserLocation={false}
+        showsUserLocation={false}
+        followsUserLocation={locationTracking}
+        zoomEnabled={true}
+        scrollEnabled={true}
+        
+        // ✅ CONFIGURACIÓN ESPECÍFICA DE OSM
+        mapType="standard" // standard, satellite, hybrid
+        tileSource="openstreetmap" // openstreetmap, opentopomap, cyclosm
       >
         {/* Marcador del usuario */}
-        <Marker
+        <OSMMapView.Marker
           coordinate={origin}
           anchor={{ x: 0.5, y: 0.5 }}
+          zIndex={1000}
         >
           <View style={styles.userLocationMarker}>
             <Image
-              source={require('../assets/arrow.webp')}
+              source={require('../assets/icons8-navegación-48.png')}
               style={styles.userArrowIcon}
             />
           </View>
-        </Marker>
+        </OSMMapView.Marker>
+
+        {/* ✅ POLYLINE DE NAVEGACIÓN OSM */}
+        {routePolyline.length > 0 && (
+          <OSMMapView.Polyline
+            coordinates={routePolyline}
+            strokeColor="#2196F3"
+            strokeWidth={5}
+            lineCap="round"
+            lineJoin="round"
+          />
+        )}
 
         {/* Círculo de área del usuario */}
-        <Circle
+        <OSMMapView.Circle
           center={origin}
           radius={500}
-          strokeWidth={1}
-          strokeColor={'rgba(0, 122, 255, 0.5)'}
-          fillColor={'rgba(0, 122, 255, 0.1)'}
+          strokeWidth={2}
+          strokeColor="rgba(21, 132, 25, 0.8)"
+          fillColor="rgba(21, 132, 25, 0.15)"
         />
 
-        {/* Marcadores de empresas/ubicaciones */}
-        {!showRoute && companyLocations.map(company => (
-          <Marker
+        {/* Marcadores de contenedores de la ruta activa */}
+        {isRouteStarted && routeContainers.map((container, index) => {
+          const isCompleted = completedContainers.includes(container.id);
+          return (
+            <Marker
+              key={container.id}
+              coordinate={{ 
+                latitude: container.location.latitude, 
+                longitude: container.location.longitude 
+              }}
+              anchor={{ x: 0.5, y: 0.5 }}
+              onPress={() => handleContainerPress(container)} 
+            >
+              <View style={[
+                styles.routeContainerMarker,
+                isCompleted && styles.completedContainerMarker
+              ]}>
+                <Text style={styles.containerOrderNumber}>{index + 1}</Text>
+                <Image
+                  source={getContainerIcon(container.type)}
+                  style={[
+                    styles.containerIcon,
+                    isCompleted && styles.completedContainerIcon
+                  ]}
+                />
+              </View>
+            </Marker>
+          );
+        })}
+
+        {/* Marcadores de empresas */}
+        {!isRouteStarted && !showRoute && companyLocations.map(company => (
+          <OSMMapView.Marker
             key={company.id}
             coordinate={{ latitude: company.latitude, longitude: company.longitude }}
-            anchor={{ x: 0.5, y: 0.5 }}
-            onPress={() => handleCompanyMarkerPress(company)} 
+            onPress={() => handleCompanyMarkerPress(company)}
           >
             <View style={styles.companyMarker}>
               <Image
-                source={require('../assets/locationTrash.png')}
+                source={require('../assets/icons8-marcador-48.png')}
                 style={styles.companyIcon}
               />
             </View>
-          </Marker>
+          </OSMMapView.Marker>
         ))}
 
         {/* Marcadores de contenedores cuando se selecciona una empresa */}
         {showRoute && selectedCompany && containersByCompany[selectedCompany.id] && 
           containersByCompany[selectedCompany.id].map(container => (
-            <Marker
+            <OSMMapView.Marker
               key={container.id}
-              coordinate={{ latitude: container.latitude, longitude: container.longitude }}
+              coordinate={{ latitude: container.location.latitude, longitude: container.location.longitude }}
               anchor={{ x: 0.5, y: 0.5 }}
-              onPress={() => handleContainerPress(container.id)} 
+              onPress={() => handleContainerPress(container)} 
             >
               <View style={styles.containerMarker}>
                 <Image
@@ -405,13 +1067,13 @@ export default function Map() {
                   style={styles.containerIcon}
                 />
               </View>
-            </Marker>
+            </OSMMapView.Marker>
           ))
         }
 
         {/* Ruta hacia la empresa seleccionada */}
-        {showRoute && selectedCompany && (
-          <Polyline
+        {showRoute && selectedCompany && !isNavigating && (
+          <OSMMapView.Polyline
             coordinates={[
               origin, 
               { latitude: selectedCompany.latitude, longitude: selectedCompany.longitude }
@@ -420,7 +1082,25 @@ export default function Map() {
             strokeWidth={4}
           />
         )}
-      </MapView>
+
+      </OSMMapView>
+
+        {/* Polyline para la ruta activa */}
+        {isRouteStarted && routeContainers.length > 1 && (
+          <OSMMapView.Polyline
+            coordinates={[
+              origin,
+              ...routeContainers.map(container => ({
+                latitude: container.location.latitude,
+                longitude: container.location.longitude
+              }))
+            ]}
+            strokeColor="#2196F3"
+            strokeWidth={4}
+            strokePattern={[5, 5]} // Línea punteada
+          />
+        )}
+      </OSMMapView>
 
       {/* Foto del usuario */}
       <TouchableOpacity
@@ -428,23 +1108,35 @@ export default function Map() {
         onPress={handleOpenDrawer}
       >
         <Image
-          source={require('../assets/user.jpg')}
+          source={require('../assets/icons8-profile-48.png')} 
           style={styles.userPhoto}
         />
       </TouchableOpacity>
 
       {/* Botón Start/Finish Route */}
-      <TouchableOpacity
+       <TouchableOpacity
         style={[
           styles.startButton,
-          isRouteStarted && styles.finishButton
+          isNavigating && styles.navigatingButton,
+          isRouteStarted && !routePaused && styles.activeRouteButton,
+          routePaused && styles.pausedRouteButton
         ]}
-        onPress={handleStartRoute}
+        onPress={routePaused ? handleResumeRoute : handleStartRoute}
       >
         <Text style={styles.startButtonText}>
-          {isRouteStarted ? 'Finish route' : 'Start route'}
+          {recalculating 
+            ? 'Calculating Route...'
+            : isNavigating 
+              ? 'Stop Navigation'
+              : routePaused 
+                ? `Resume Route (${completedContainers.length}/${routeContainers.length})`
+                : isRouteStarted 
+                  ? `Route Progress (${completedContainers.length}/${routeContainers.length})`
+                  : 'Plan Route'
+          }
         </Text>
       </TouchableOpacity>
+
 
       {/* Botón de recentrar con funcionalidad real */}
       <TouchableOpacity
@@ -452,7 +1144,7 @@ export default function Map() {
         onPress={handleRecenterMap}
       >
         <Image
-          source={require('../assets/location.png')}
+          source={require('../assets/icons8-center-of-gravity-48.png')}
           style={styles.recenterIcon}
         />
       </TouchableOpacity>
@@ -546,7 +1238,7 @@ export default function Map() {
           <View style={styles.companyMenuContent}>
             <View style={styles.companyIconContainer}>
               <Image
-                source={require('../assets/locationTrash.png')}
+                source={require('../assets/icons8-marcador-48.png')}
                 style={styles.companyMenuIcon}
               />
             </View>
@@ -562,7 +1254,7 @@ export default function Map() {
                 onPress={handleIncidences}
               >
                 <Image
-                  source={require('../assets/incidenceTrash.png')}
+                  source={require('../assets/icons8-alarmas-48.png')}
                   style={styles.actionButtonIcon}
                 />
               </TouchableOpacity>
@@ -572,7 +1264,7 @@ export default function Map() {
                 onPress={handleStatus}
               >
                 <Image
-                  source={require('../assets/status.png')}
+                  source={require('../assets/icons8-confirmar-48.png')}
                   style={styles.actionButtonIcon}
                 />
               </TouchableOpacity>
@@ -582,7 +1274,7 @@ export default function Map() {
                 onPress={handleOptions}
               >
                 <Image
-                  source={require('../assets/other-2.png')}
+                  source={require('../assets/icons8-tres-puntos-48.png')}
                   style={styles.actionButtonIcon}
                 />
               </TouchableOpacity>
@@ -598,7 +1290,7 @@ export default function Map() {
         </Animated.View>
       )}
 
-      {/* Menú de status de contenedores */}
+      {/* ✅ MENÚ DE STATUS CON LOADING Y CONTENEDORES REALES */}
       {showStatusMenu && selectedCompany && (
         <Animated.View
           style={[
@@ -626,28 +1318,81 @@ export default function Map() {
             <View style={styles.placeholder} />
           </View>
 
-          <FlatList
-            data={containersByCompany[selectedCompany.id] || []}
-            renderItem={renderContainerItem}
-            keyExtractor={item => item.id}
-            style={styles.containerList}
-            showsVerticalScrollIndicator={false}
-          />
+          {/* ✅ MOSTRAR LOADING O LISTA DE CONTENEDORES */}
+          {loadingContainers ? (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color="#158419" />
+              <Text style={styles.loadingText}>Loading containers...</Text>
+            </View>
+          ) : (
+            <FlatList
+              data={containersByCompany[selectedCompany.id] || []}
+              renderItem={renderContainerItem}
+              keyExtractor={item => item.container_id || item.id}
+              style={styles.containerList}
+              showsVerticalScrollIndicator={false}
+              ListEmptyComponent={() => (
+                <View style={styles.emptyContainer}>
+                  <Text style={styles.emptyText}>No containers found for this company</Text>
+                </View>
+              )}
+            />
+          )}
         </Animated.View>
       )}
     </View>
   );
 }
-
-// ...existing code...
-// Los estilos permanecen igual
 const styles = StyleSheet.create({
-  // ...existing styles...
   container: {
     flex: 1,
     backgroundColor: '#fff',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  activeRouteHeader: {
+    position: 'absolute',
+    top: 40,
+    left: 80,
+    right: 20,
+    backgroundColor: 'rgba(33, 150, 243, 0.95)',
+    paddingHorizontal: 15,
+    paddingVertical: 10,
+    borderRadius: 25,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    zIndex: 1000,
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 5,
+  },
+  routeInfoContainer: {
+    flex: 1,
+  },
+  routeTitle: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 2,
+  },
+  routeProgress: {
+    color: '#fff',
+    fontSize: 12,
+    opacity: 0.9,
+  },
+  pausedBadge: {
+    backgroundColor: '#FF9800',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 10,
+  },
+  pausedText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: 'bold',
   },
   map: {
     width: '100%',
@@ -657,20 +1402,21 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: '#4CAF50',
+    backgroundColor: '#158419',
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 2,
+    borderWidth: 3,
     borderColor: '#fff',
-    elevation: 3,
+    elevation: 8,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    zIndex: 1000,
   },
   userArrowIcon: {
-    width: 20,
-    height: 20,
+    width: 30,
+    height: 30,
     tintColor: '#fff',
   },
   companyMarker: {
@@ -688,10 +1434,44 @@ const styles = StyleSheet.create({
     height: 30,
     justifyContent: 'center',
     alignItems: 'center',
+    zIndex:100,
+  },
+  routeContainerMarker: {
+    width: 40,
+    height: 40,
+    backgroundColor: '#2196F3',
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#fff',
+    elevation: 3,
+  },
+  completedContainerMarker: {
+    backgroundColor: '#4CAF50',
+  },
+  containerOrderNumber: {
+    position: 'absolute',
+    top: -8,
+    right: -8,
+    backgroundColor: '#FF6600',
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: 'bold',
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    textAlign: 'center',
+    lineHeight: 16,
+    zIndex: 1,
   },
   containerIcon: {
     width: 25,
     height: 25,
+    tintColor: '#fff',
+  },
+  completedContainerIcon: {
+    tintColor: '#fff',
   },
   userPhotoContainer: {
     position: 'absolute',
@@ -727,9 +1507,6 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.2,
     shadowRadius: 5,
-  },
-  finishButton: {
-    backgroundColor: '#FF5722',
   },
   startButtonText: {
     color: '#fff',
@@ -781,12 +1558,12 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    backgroundColor: '#FAFAFA',
+    borderTopLeftRadius: 25,
+    borderTopRightRadius: 25,
     paddingTop: 10,
     paddingHorizontal: 20,
-    elevation: 10,
+    elevation: 15,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: -3 },
     shadowOpacity: 0.2,
@@ -795,41 +1572,74 @@ const styles = StyleSheet.create({
   bottomSheetHandle: {
     width: 40,
     height: 5,
-    backgroundColor: '#ccc',
+    backgroundColor: '#E0E0E0',
     borderRadius: 2.5,
     alignSelf: 'center',
-    marginBottom: 15,
+    marginBottom: 20,
   },
+
+  statusHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 15,
+    paddingHorizontal: 5,
+    marginBottom: 20,
+    backgroundColor: '#fff',
+    borderRadius: 15,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+
+  },
+
+
+
   companyMenuContent: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 15,
+    paddingVertical: 20,
+    backgroundColor: '#fff',
+    borderRadius: 15,
+    marginBottom: 15,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+    paddingHorizontal: 15,
   },
+
+
   companyIconContainer: {
     width: 50,
     height: 50,
     borderRadius: 25,
-    backgroundColor: '#f0f0f0',
+    backgroundColor: '#F0F8FF',
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 15,
+    elevation: 1,
   },
   companyMenuIcon: {
     width: 30,
     height: 30,
+    tintColor: '#158419',
   },
   companyInfo: {
     flex: 1,
   },
   companyName: {
-    fontSize: 16,
-    fontWeight: 'bold',
+    fontSize: 17,
+    fontWeight: '600',
     color: '#333',
-    marginBottom: 3,
+    marginBottom: 4,
   },
   companyDistance: {
     fontSize: 13,
-    color: '#FF5722',
+    color: '#158419',
     fontWeight: '500',
   },
   actionButtons: {
@@ -840,7 +1650,7 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: '#f0f0f0',
+    backgroundColor: '#F0F8FF',
     justifyContent: 'center',
     alignItems: 'center',
     elevation: 2,
@@ -855,14 +1665,14 @@ const styles = StyleSheet.create({
     resizeMode: 'contain',
   },
   selectButton: {
-    backgroundColor: '#4CAF50',
-    paddingVertical: 12,
+    backgroundColor: '#158419',
+    paddingVertical: 15,
     borderRadius: 25,
     alignItems: 'center',
     marginTop: 15,
-    marginBottom: 20,
+    marginBottom: 25,
     elevation: 3,
-    shadowColor: '#000',
+    shadowColor: '#158419',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.2,
     shadowRadius: 3,
@@ -871,25 +1681,21 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
+    letterSpacing: 0.5,
   },
-  statusHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
-    marginBottom: 15,
-  },
+
   backButton: {
     width: 40,
     height: 40,
+    borderRadius: 20,
+    backgroundColor: '#F5F5F5',
+    elevation: 1,
     justifyContent: 'center',
     alignItems: 'center',
   },
   backButtonText: {
-    fontSize: 24,
-    color: '#333',
+    fontSize: 18,
+    color: '#158419',
     fontWeight: 'bold',
   },
   statusTitle: {
@@ -902,30 +1708,36 @@ const styles = StyleSheet.create({
   },
   containerList: {
     flex: 1,
+    paddingHorizontal: 0,
   },
   containerListItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#f9f9f9',
-    borderRadius: 10,
-    padding: 15,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: '#eee',
+    backgroundColor: '#fff',
+    borderRadius: 15,
+    padding: 20,
+    marginBottom: 15,
+    elevation: 3,
+    shadowColor: '#000', 
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    borderWidth: 0,
   },
   containerListIcon: {
-    width: 30,
-    height: 30,
-    marginRight: 15,
+    width: 32,
+    height: 32,
+    marginRight: 20,
+    tintColor: '#158419',
   },
   containerListInfo: {
     flex: 1,
   },
   containerListId: {
-    fontSize: 16,
-    fontWeight: 'bold',
+    fontSize: 17,
+    fontWeight: '600',
     color: '#333',
-    marginBottom: 3,
+    marginBottom: 4,
   },
   containerListPercentage: {
     fontSize: 14,
@@ -940,7 +1752,7 @@ const styles = StyleSheet.create({
   containerOptionsIcon: {
     width: 20,
     height: 20,
-    tintColor: '#999',
+    tintColor: '#158419',
   },
   modalOverlay: {
     flex: 1,
@@ -1043,5 +1855,94 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
+  },
+  activeRouteButton: {
+    backgroundColor: '#2196F3',
+  },
+  pausedRouteButton: {
+    backgroundColor: '#FF9800',
+  },
+  userPhotoContainer: {
+    position: 'absolute',
+    top: 50,
+    left: 20,
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: '#fff', 
+    borderWidth: 2,
+    borderColor: '#158419', 
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 5,
+    justifyContent: 'center', 
+    alignItems: 'center', 
+  },
+  userPhoto: {
+    width: 30, 
+    height: 30, 
+    tintColor: '#158419', 
+  },
+  
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 40,
+  },
+  loadingText: {
+    marginTop: 10,
+    color: '#666',
+    fontSize: 14,
+  },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 40,
+  },
+  emptyText: {
+    color: '#666',
+    fontSize: 14,
+    textAlign: 'center',
+  },
+  containerDeviceId: {
+    fontSize: 12,
+    color: '#999',
+    marginTop: 2,
+  },
+   navigationHeader: {
+    position: 'absolute',
+    top: 40,
+    left: 20,
+    right: 20,
+    backgroundColor: 'rgba(33, 150, 243, 0.95)',
+    paddingHorizontal: 15,
+    paddingVertical: 12,
+    borderRadius: 25,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    zIndex: 1000,
+    elevation: 5,
+  },
+  navigationInfo: {
+    flex: 1,
+  },
+  navigationDistance: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 2,
+  },
+  navigationInstruction: {
+    color: '#fff',
+    fontSize: 12,
+    opacity: 0.9,
+  },
+  navigatingButton: {
+    backgroundColor: '#FF5722',
   },
 });

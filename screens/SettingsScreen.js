@@ -36,7 +36,7 @@ export default function SettingsScreen() {
         <TouchableOpacity onPress={handleGoBack} style={styles.headerButton}>
 
           <Image
-            source={require('../assets/less.png')} 
+            source={require('../assets/icons8-less-than-48.png')} 
             style={styles.headerIcon}
           />
         </TouchableOpacity>
