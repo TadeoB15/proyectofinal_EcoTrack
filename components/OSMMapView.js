@@ -2,6 +2,8 @@ import React, { forwardRef, useImperativeHandle, useRef } from 'react';
 import MapView, { Marker, Polyline, Circle, UrlTile } from 'react-native-maps';
 import { MAP_CONFIG } from '../config/MapConfig';
 
+
+
 const OSMMapView = forwardRef(({ 
   children, 
   onRegionChange, 
@@ -68,4 +70,7 @@ const OSMMapView = forwardRef(({
   );
 });
 
+OSMMapView.Marker = Marker;
+OSMMapView.Polyline = Polyline;
+OSMMapView.Circle = Circle;
 export default OSMMapView;

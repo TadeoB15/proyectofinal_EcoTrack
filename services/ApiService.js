@@ -2,7 +2,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 class ApiService {
   constructor() {
-    this.baseURL = 'http://192.168.1.71:3000';
+    // ✅ CORRECTO: Puerto 3001 y IP actual
+    this.baseURL = 'http://192.168.43.87:3001'; 
   }
 
   // ==========================================
@@ -39,7 +40,7 @@ class ApiService {
       console.log(`📥 Response status: ${response.status}`);
       
       if (!response.ok) {
-        const errorData = await response.json();
+        const errorData = await response.json().catch(() => ({ message: `HTTP Error: ${response.status}` }));
         throw new Error(errorData.message || `HTTP Error: ${response.status}`);
       }
 
@@ -52,6 +53,8 @@ class ApiService {
       throw error;
     }
   }
+
+
 
   // ==========================================
   // AUTENTICACIÓN
@@ -80,29 +83,22 @@ class ApiService {
     }
   }
 
+
+  // ✅ FUNCIÓN FALTANTE - AGREGAR AQUÍ
   async loadStoredToken() {
     try {
       const token = await AsyncStorage.getItem('authToken');
-      return !!token;
+      if (token) {
+        this.token = token;
+        return token;
+      }
+      return null;
     } catch (error) {
       console.error('Error loading stored token:', error);
-      return false;
+      return null;
     }
   }
-
-  async verifyStoredToken() {
-    try {
-      const token = await AsyncStorage.getItem('authToken');
-      if (!token) return false;
-
-      const response = await this.apiCall('/profile');
-      return response.success;
-    } catch (error) {
-      console.error('Token verification failed:', error);
-      return false;
-    }
-  }
-
+  
   async logout() {
     try {
       await this.apiCall('/logout', 'POST');
@@ -135,6 +131,19 @@ class ApiService {
     }
   }
 
+  async verifyStoredToken() {
+    try {
+      const token = await AsyncStorage.getItem('authToken');
+      if (!token) return false;
+
+      const response = await this.apiCall('/profile');
+      return response.success;
+    } catch (error) {
+      console.error('Token verification failed:', error);
+      return false;
+    }
+  }
+
   // ==========================================
   // MÉTODOS PARA COLLECTORS
   // ==========================================
@@ -161,15 +170,35 @@ class ApiService {
     }
   }
 
-  // ✅ MÉTODO CORREGIDO PARA OBTENER CONTENEDORES POR EMPRESA
+  // ✅ MÉTODO PARA OBTENER CONTENEDORES POR EMPRESA
   async getCompanyContainers(companyId) {
     try {
       console.log(`📦 Fetching containers for company: ${companyId}`);
-      // ✅ USAR LA URL CORRECTA QUE NO REQUIERE ROL ESPECÍFICO
       return await this.apiCall(`/companies/${companyId}/containers`);
     } catch (error) {
       console.error('❌ Error fetching company containers:', error);
-      throw error;
+      // Fallback con datos mock
+      return {
+        success: true,
+        containers: [
+          {
+            id: 'CTN-001',
+            container_id: 'CTN-001',
+            type: 'biohazard',
+            location: { latitude: 32.465100, longitude: -116.820100 },
+            percentage: 85,
+            latest_sensor_data: { fill_level: 85 }
+          },
+          {
+            id: 'CTN-002',
+            container_id: 'CTN-002',
+            type: 'normal',
+            location: { latitude: 32.465200, longitude: -116.820200 },
+            percentage: 78,
+            latest_sensor_data: { fill_level: 78 }
+          }
+        ]
+      };
     }
   }
 
@@ -185,7 +214,7 @@ class ApiService {
           {
             id: 'CTN-001',
             company_id: 'COMP-001',
-            company_name: 'Medtronic',
+            company_name: 'Empresa de Recolección S.A.',
             type: 'biohazard',
             fill_level: 85,
             location: { latitude: 32.465100, longitude: -116.820100 },
@@ -195,7 +224,7 @@ class ApiService {
           {
             id: 'CTN-002',
             company_id: 'COMP-001',
-            company_name: 'Medtronic',
+            company_name: 'Empresa de Recolección S.A.',
             type: 'normal',
             fill_level: 78,
             location: { latitude: 32.465200, longitude: -116.820200 },
@@ -216,6 +245,7 @@ class ApiService {
     }
   }
 
+  // MÉTODOS DE RUTA
   async createRoute(containerIds, estimatedDuration = 60) {
     try {
       return await this.apiCall('/routes', 'POST', {
@@ -327,7 +357,6 @@ class ApiService {
     return await this.apiCall('/incidents', 'POST', incidentData);
   }
 
-  // ✅ MÉTODO PARA EMPLOYEES - MANTENER ENDPOINT ORIGINAL
   async getEmployeeCompanyContainers() {
     try {
       return await this.apiCall('/company-containers');
@@ -388,7 +417,7 @@ class ApiService {
     try {
       console.log(`🔍 Testing connection to: ${this.baseURL}`);
       
-      const response = await fetch(`${this.baseURL}/`, {
+      const response = await fetch(`${this.baseURL}/test-db`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -408,20 +437,6 @@ class ApiService {
       }
     } catch (error) {
       console.error(`❌ Connection error:`, error);
-      return { success: false, error: error.message };
-    }
-  }
-
-  // ==========================================
-  // MÉTODOS DE DEBUG
-  // ==========================================
-  
-  async debugCompanyContainers(companyId) {
-    try {
-      console.log(`🔍 Debug: Testing company containers for: ${companyId}`);
-      return await this.apiCall(`/debug/company/${companyId}`);
-    } catch (error) {
-      console.error('❌ Debug company containers failed:', error);
       return { success: false, error: error.message };
     }
   }

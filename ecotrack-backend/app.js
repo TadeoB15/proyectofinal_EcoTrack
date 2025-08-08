@@ -9,7 +9,9 @@ const bcrypt = require('bcrypt');
 const { MongoClient } = require('mongodb'); // Agregar importación de MongoDB
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3001;
+
+
 
 // Variables globales para las conexiones
 let mongoDb = null;

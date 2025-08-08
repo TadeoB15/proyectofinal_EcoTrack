@@ -211,33 +211,7 @@ export default function Login({ navigation }) {
               </View>
             </View>
             
-            {/* Botones de testing rápido (solo para desarrollo) */}
-            <View style={styles.quickTestContainer}>
-              <TouchableOpacity 
-                style={[styles.quickTestButton, { backgroundColor: '#FF6B6B' }]}
-                onPress={fillCollectorCredentials}
-                disabled={loading}
-              >
-                <Text style={styles.quickTestText}>Collector</Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity 
-                style={[styles.quickTestButton, { backgroundColor: '#4ECDC4' }]}
-                onPress={fillEmployeeCredentials}
-                disabled={loading}
-              >
-                <Text style={styles.quickTestText}>Employee</Text>
-              </TouchableOpacity>
-            </View>
             
-            {/* Botón de test de conexión */}
-            <TouchableOpacity 
-              style={[styles.loginButton, { backgroundColor: '#007AFF', marginBottom: 10 }]}
-              onPress={testConnection}
-              disabled={loading}
-            >
-              <Text style={styles.loginButtonText}>Test Conexión</Text>
-            </TouchableOpacity>
 
             {/* Botón principal de login */}
             <TouchableOpacity 
@@ -255,8 +229,6 @@ export default function Login({ navigation }) {
             {/* Información de ayuda */}
             <View style={styles.helpContainer}>
               <Text style={styles.helpText}>
-                Collector: larry_collector / 123456{'\n'}
-                Employee: juan_employee / 123456
               </Text>
             </View>
           </View>
