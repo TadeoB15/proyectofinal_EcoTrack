@@ -2,19 +2,18 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 class RouteService {
   constructor() {
-    // ✅ REGISTRA TU API KEY GRATUITA EN: https://openrouteservice.org/
     this.apiKey = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImI1ZWQxNjc3NzQxOTQyMjNhNDI4MGZjNTlmOWZjZDE0IiwiaCI6Im11cm11cjY0In0='; //API KEY
     this.baseURL = 'https://api.openrouteservice.org/v2';
     this.currentRoute = null;
     this.isTracking = false;
   }
 
-  // 🛣️ OBTENER RUTA OPTIMIZADA ENTRE MÚLTIPLES PUNTOS
+  // OBTENER RUTA OPTIMIZADA ENTRE MÚLTIPLES PUNTOS
   async getOptimizedRoute(startPoint, waypoints, profile = 'driving-car') {
     try {
       console.log(`🚗 Calculating optimized route with ${waypoints.length} waypoints...`);
 
-      // Preparar coordenadas en formato [lng, lat] (ORS format)
+      
       const allCoordinates = [
         [startPoint.longitude, startPoint.latitude], // Punto de inicio
         ...waypoints.map(point => [point.longitude, point.latitude])
@@ -22,14 +21,14 @@ class RouteService {
 
       const requestBody = {
         coordinates: allCoordinates,
-        profile: profile, // driving-car, foot-walking, cycling-regular
-        optimize: true, // ✅ OPTIMIZACIÓN AUTOMÁTICA DE RUTA
+        profile: profile, 
+        optimize: true, 
         instructions: true,
         geometry: true,
         elevation: false,
         extra_info: ['waytype', 'steepness'],
         options: {
-          avoid_features: ['highways'], // Evitar autopistas si es necesario
+          avoid_features: ['highways'], 
           round_trip: false
         }
       };

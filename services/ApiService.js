@@ -2,8 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 class ApiService {
   constructor() {
-    // ✅ CORRECTO: Puerto 3001 y IP actual
-    this.baseURL = 'http://192.168.43.87:3001'; 
+    this.baseURL = 'http://10.248.138.20:3001'; 
   }
 
   // ==========================================
@@ -84,7 +83,7 @@ class ApiService {
   }
 
 
-  // ✅ FUNCIÓN FALTANTE - AGREGAR AQUÍ
+  //  FUNCIÓN FALTANTE - AGREGAR AQUÍ
   async loadStoredToken() {
     try {
       const token = await AsyncStorage.getItem('authToken');
@@ -170,7 +169,7 @@ class ApiService {
     }
   }
 
-  // ✅ MÉTODO PARA OBTENER CONTENEDORES POR EMPRESA
+  // MÉTODO PARA OBTENER CONTENEDORES POR EMPRESA
   async getCompanyContainers(companyId) {
     try {
       console.log(`📦 Fetching containers for company: ${companyId}`);

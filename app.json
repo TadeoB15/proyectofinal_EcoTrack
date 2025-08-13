@@ -1,5 +1,53 @@
-"permissions": [
+{
+  "expo": {
+    "name": "movil_EcoTrack",
+    "slug": "movil_EcoTrack",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "EcoTrack necesita acceso a tu ubicación para mostrar tu posición en el mapa y calcular rutas de recolección.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "EcoTrack necesita acceso continuo a tu ubicación para rastrear tu progreso durante las rutas de recolección.",
+        "NSLocationAlwaysUsageDescription": "EcoTrack necesita acceso a tu ubicación en todo momento para el seguimiento de rutas de recolección."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "edgeToEdgeEnabled": true,
+      "permissions": [
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION",
-        "ACCESS_BACKGROUND_LOCATION"
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION"
       ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "EcoTrack necesita acceso a tu ubicación para mostrar tu posición en el mapa y calcular rutas de recolección.",
+          "locationAlwaysPermission": "EcoTrack necesita acceso continuo a tu ubicación para rastrear tu progreso durante las rutas de recolección.",
+          "locationWhenInUsePermission": "EcoTrack necesita acceso a tu ubicación para mostrar tu posición en el mapa.",
+          "isIosBackgroundLocationEnabled": true,
+          "isAndroidBackgroundLocationEnabled": true
+        }
+      ]
+    ]
+  }
+}
